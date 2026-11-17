@@ -1,10 +1,32 @@
 """Portfolio: what you own (holdings) and what you aim to own (allocation)."""
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from decimal import Decimal
+from enum import StrEnum
 
 from portfolio.money import Number, to_decimal
 from portfolio.stock import Stock
+
+
+class Side(StrEnum):
+    BUY = "buy"
+    SELL = "sell"
+
+
+@dataclass(frozen=True, slots=True)
+class Order:
+    """One instruction of a rebalance: buy or sell ``shares`` worth ``amount``.
+
+    ``shares`` and ``amount`` are always positive; the direction lives in ``side``.
+    Both are returned because apps usually execute by amount (fractional investing)
+    while brokers and users often reason in shares.
+    """
+
+    symbol: str
+    side: Side
+    shares: Decimal
+    amount: Decimal
 
 
 class Portfolio:
@@ -88,3 +110,47 @@ class Portfolio:
     def total_value(self) -> Decimal:
         """Market value of every holding at current prices."""
         return sum((self.position_value(symbol) for symbol in self._shares), Decimal(0))
+
+    def rebalance(self, min_trade_value: Number = 0) -> list[Order]:
+        """Return the orders that move the holdings to the target allocation.
+
+        For every stock, held or allocated:
+
+            target value = total value * target weight
+            difference   = target value - current value
+            difference > 0 -> BUY that amount; difference < 0 -> SELL it
+
+        Rebalancing redistributes the current value, it does not add money, so the
+        sum of buys equals the sum of sells (self-financed). Selling first frees the
+        cash the buys need, which is why sells come first in the result. Within each
+        side orders are sorted by symbol, so the same input always gives the same
+        output.
+
+        ``min_trade_value`` skips orders whose amount is not greater than it. Prices
+        move every second, so without a threshold an almost balanced portfolio would
+        trade tiny amounts on every call and pay fees for nothing. The default of
+        zero keeps the result exact. With a threshold, a skipped order leaves the
+        portfolio slightly off target, and buys and sells may no longer cancel out.
+
+        The method only computes orders; it does not execute them or change the
+        portfolio, so it is safe to call to preview a rebalance.
+        """
+        threshold = to_decimal(min_trade_value, "min_trade_value")
+        if threshold < 0:
+            raise ValueError(f"min_trade_value must not be negative, got {threshold}")
+
+        total = self.total_value()
+        sells: list[Order] = []
+        buys: list[Order] = []
+        for symbol in self.symbols():
+            difference = total * self.target_weight(symbol) - self.position_value(symbol)
+            amount = abs(difference)
+            if amount == 0 or amount <= threshold:
+                continue
+            # The only division in the module. Decimal keeps 28 significant digits,
+            # so a non-terminating quotient (e.g. 100 / 3) is off by less than 1e-25
+            # shares: far below anything a broker can execute.
+            side = Side.BUY if difference > 0 else Side.SELL
+            order = Order(symbol, side, shares=amount / self.price(symbol), amount=amount)
+            (buys if side is Side.BUY else sells).append(order)
+        return sells + buys
