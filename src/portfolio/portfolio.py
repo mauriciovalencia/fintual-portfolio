@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
+from fractions import Fraction
 
 from portfolio.money import Number, to_decimal
 from portfolio.stock import Stock
@@ -69,10 +70,16 @@ class Portfolio:
                 )
             self._weights[stock.symbol] = fraction
 
-        # Exact comparison is safe because weights are Decimals, never floats.
-        total_weight = sum(self._weights.values(), Decimal(0))
+        # Summed as exact rationals, not Decimals. Decimal rounds every addition to 28
+        # significant digits, so the result of a Decimal sum depends on the order of
+        # the terms: the same weights could add up to 1 in one order and to
+        # 0.9999999999999999999999999999 in another. The property-based tests caught
+        # exactly that. Fraction has no rounding, so this check is exact and does
+        # not depend on order.
+        total_weight = sum((Fraction(weight) for weight in self._weights.values()), Fraction(0))
         if total_weight != 1:
-            raise ValueError(f"allocation weights must add up to 1, got {total_weight}")
+            shown = Decimal(total_weight.numerator) / Decimal(total_weight.denominator)
+            raise ValueError(f"allocation weights must add up to 1, got {shown}")
 
     def _register(self, stock: Stock) -> None:
         """Index stocks by symbol, refusing two different prices for one symbol.
@@ -108,8 +115,13 @@ class Portfolio:
         return self.shares(symbol) * self.price(symbol)
 
     def total_value(self) -> Decimal:
-        """Market value of every holding at current prices."""
-        return sum((self.position_value(symbol) for symbol in self._shares), Decimal(0))
+        """Market value of every holding at current prices.
+
+        Summed in symbol order (not input order) for the same reason as the weight
+        check: Decimal addition rounds, so a fixed order keeps the result identical
+        however the caller built the holdings.
+        """
+        return sum((self.position_value(s) for s in sorted(self._shares)), Decimal(0))
 
     def rebalance(self, min_trade_value: Number = 0) -> list[Order]:
         """Return the orders that move the holdings to the target allocation.

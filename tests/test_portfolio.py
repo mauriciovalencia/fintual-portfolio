@@ -36,6 +36,20 @@ def test_allocation_that_adds_up_with_many_decimals_is_accepted():
     Portfolio(holdings={}, allocation=weights)
 
 
+@pytest.mark.parametrize("order", [(0, 1, 2), (2, 0, 1)])
+def test_weight_sum_check_does_not_depend_on_input_order(order):
+    # Found by the property-based tests: summed as Decimals, these weights give 1 in
+    # one order and 0.9999999999999999999999999999 in another.
+    weights = [
+        Decimal("0.08333333333333333333333333333"),
+        Decimal("0.08333333333333333333333333333"),
+        Decimal("0.83333333333333333333333333334"),
+    ]
+    stocks = [META, AAPL, Stock("MSFT", "400")]
+
+    Portfolio(holdings={}, allocation={stocks[i]: weights[i] for i in order})
+
+
 def test_allocation_must_not_be_empty():
     with pytest.raises(ValueError, match="allocation"):
         Portfolio(holdings={META: "1"}, allocation={})
